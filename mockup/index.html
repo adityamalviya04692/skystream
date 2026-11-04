@@ -386,7 +386,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
         <button class="icon-btn" id="theme" aria-label="Switch light or dark theme"></button>
       </div>
     </div>
-    <div class="live-note" id="live-note" hidden><span class="pulse"></span><span><b>Live data</b> from your SkyStream pipeline: map, flight card, engines, weather, events and pipeline. Airport boards, delays and flight insights stay simulated, because free ADS-B data has no schedules.</span></div>
+    <div class="live-note" id="live-note" hidden><span class="pulse"></span><span><b>Live data</b> from your SkyStream pipeline: every page reads real captures. Only delay figures (the delay-by-hour chart and delay causes) can't be live, because free ADS-B data has no schedules.</span></div>
 
     <!-- LIVE -->
     <section class="page" id="page-live">
@@ -964,6 +964,7 @@ function renderBoard() {
   }
 }
 function renderAirports() {
+  if (LIVE.on) return renderAirportsLive();
   renderBoard();
   $("otp-bars").innerHTML = Object.keys(AIRLINES).map(k => ({ k, v: stats.al[k].ok / stats.al[k].deps * 100 })).sort((a, b) => b.v - a.v)
     .map(({ k, v }) => `<div class="bar-row"><span class="lbl"><i style="background:${alColor(k)}"></i>${AIRLINES[k].name}</span>
@@ -986,6 +987,7 @@ function renderAirports() {
 
 // ===================== rendering: insights =====================
 function renderInsights() {
+  if (LIVE.on) return renderInsightsLive();
   const air = planes.filter(p => p.phase === "air");
   const ph = { Scheduled: planes.filter(p => p.phase === "sched").length, Boarding: planes.filter(p => p.phase === "board").length,
     Climbing: air.filter(p => p.frac < .12).length, Cruising: air.filter(p => p.frac >= .12 && p.frac <= .86).length,
@@ -1153,7 +1155,8 @@ async function startLive() {
 async function refreshLive() {
   try {
     const [live, summary, weather, events, engines, caps] = await Promise.all(
-      ["api/live", "api/summary", "api/weather", "api/events?limit=30", "api/engines", "api/captures"].map(api));
+      ["api/live", "api/summary", "api/weather", "api/events?limit=200", "api/engines", "api/captures"].map(api));
+    LIVE.events = events;
     LIVE.aircraft = live.aircraft.filter(a => a.latitude != null && a.longitude != null);
     LIVE.aircraft.forEach(a => a.engine && ensureEngine(a.engine, a.maker));
     LIVE.summary = summary;
@@ -1266,6 +1269,81 @@ function renderLiveView() {
   const counts = {}; air.forEach(a => { const k = AIRLINES[a.airline_icao] ? a.airline_icao : "other"; counts[k] = (counts[k] || 0) + 1; });
   $("chips").innerHTML = [...Object.keys(AIRLINES), "other"].map(k => `<button class="chip" aria-pressed="${filter.has(k)}" data-k="${k}"><i style="background:${k === "other" ? css("--muted") : alColor(k)}"></i>${k === "other" ? "Other and international" : AIRLINES[k].name}<em>${counts[k] || 0}</em></button>`).join("");
   $("chips").querySelectorAll(".chip").forEach(b => b.onclick = () => { const k = b.dataset.k; filter.has(k) ? filter.delete(k) : filter.add(k); render(); });
+}
+
+const setCardHead = (id, title, sub) => { const c = $(id).closest(".card"); c.querySelector("h2").textContent = title; c.querySelector(".sub").textContent = sub; };
+const domesticKey = a => AIRLINES[a.airline_icao] ? a.airline_icao : "other";
+const vrPhase = a => a.on_ground ? "On ground" : (a.vertical_rate || 0) > 1.5 ? "Climbing" : (a.vertical_rate || 0) < -1.5 ? "Descending" : "Cruising";
+
+function renderAirportsLive() {
+  const apt = APT[board.apt], dep = board.mode === "dep";
+  $("board-title").textContent = `${dep ? "Departures" : "Arrivals"} detected · ${apt.city}`;
+  $("th-city").textContent = "Aircraft";
+  const rows = (LIVE.events || []).filter(e => e.airport === apt.code && e.event === (dep ? "takeoff" : "landing")).slice(0, 10);
+  const html = rows.length ? rows.map(e => `<tr><td class="tm">${hm(e.ts * 1000)}</td><td class="fl"><span class="dot" style="background:${AIRLINES[e.airline_icao]?.cd || "#7a8b84"}"></span>${e.callsign || e.icao24}</td>
+      <td>${e.typecode || "—"}${e.registration ? " · " + e.registration : ""}</td><td class="al-col st-mute">${AIRLINES[e.airline_icao]?.name || "Other"}</td>
+      <td class="${dep ? "st-good" : "st-mute"}">${dep ? "Departed" : "Landed"} ${hm(e.ts * 1000)}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="st-mute">No ${dep ? "takeoffs" : "landings"} detected at ${apt.city} yet. They appear when an aircraft's on-ground flag flips between captures near this airport.</td></tr>`;
+  if (html !== lastRows) { $("fids").innerHTML = html; lastRows = html; }
+
+  const air = LIVE.aircraft.filter(a => !a.on_ground), counts = {};
+  air.forEach(a => counts[domesticKey(a)] = (counts[domesticKey(a)] || 0) + 1);
+  const mx = Math.max(1, ...Object.values(counts));
+  setCardHead("otp-bars", "Airlines in the sky now", "Airborne aircraft per airline in the last capture");
+  $("otp-bars").innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([k, n]) => {
+    const c = k === "other" ? css("--muted") : alColor(k);
+    return `<div class="bar-row"><span class="lbl"><i style="background:${c}"></i>${k === "other" ? "Other / intl" : AIRLINES[k].name}</span>
+      <div class="track"><div style="width:${n / mx * 100}%;background:${c}"></div></div><span class="num">${n}<small>${Math.round(n / air.length * 100)}%</small></span></div>`;
+  }).join("");
+
+  setCardHead("delay-bars", "Weather watch", "Lowest visibility from the latest METARs · tap to open board");
+  const ws = [...AIRPORTS].sort((x, y) => x.vis - y.vis).slice(0, 7);
+  $("delay-bars").innerHTML = ws.map(a => `<div class="bar-row" style="cursor:pointer" data-apt="${a.code}"><span class="lbl"><span class="mono">${a.code}</span>
+      <span class="wx ${hasWxDelay(a) ? "warn" : ""}">${a.wx} ${a.temp.toFixed(0)}°C</span></span>
+      <div class="track"><div style="width:${Math.min(100, a.vis / 100)}%;background:${a.vis < 2000 ? css("--bad") : a.vis < 4000 ? css("--warn") : css("--good")}"></div></div>
+      <span class="num">${(a.vis / 1000).toFixed(1)}<small>km vis</small></span></div>`).join("");
+  $("delay-bars").querySelectorAll("[data-apt]").forEach(el => el.onclick = () => setBoardApt(el.dataset.apt));
+
+  setCardHead("routes", "Busiest airspace right now", "Airborne aircraft within 100 km of each airport");
+  const near = AIRPORTS.map(a => ({ a, list: air.filter(x => km({ lat: x.latitude, lon: x.longitude }, a) <= 100) }))
+    .filter(x => x.list.length).sort((x, y) => y.list.length - x.list.length).slice(0, 7);
+  $("routes").innerHTML = near.map(({ a, list }, i) => `<li><span class="rk">${i + 1}</span><span class="rn">${a.code}<small>${a.city} · ${list.filter(x => (x.vertical_rate || 0) < -1.5).length} descending, ${list.filter(x => (x.vertical_rate || 0) > 1.5).length} climbing</small></span>
+    <span class="ra">${[...new Set(list.map(domesticKey))].map(k => `<i style="background:${k === "other" ? css("--muted") : alColor(k)}"></i>`).join("")}<b>${list.length}</b></span></li>`).join("");
+  if (charts.best && charts.best._apt !== board.apt) drawBest();
+  $("best-note").innerHTML = `<b>Simulated:</b> delay by hour needs scheduled times, which free ADS-B data doesn't include. ` + $("best-note").innerHTML.replace(/^<b>Simulated:<\/b>.*?include\. /, "");
+}
+
+function renderInsightsLive() {
+  const all = LIVE.aircraft, air = all.filter(a => !a.on_ground), s = LIVE.summary || {};
+  const ph = { "On ground": 0, Climbing: 0, Cruising: 0, Descending: 0 };
+  all.forEach(a => ph[vrPhase(a)]++);
+  const info = { "On ground": ["Taxiing or parked, where receivers can hear it", ICON.route], Climbing: ["Rising faster than 300 ft/min", ICON.alt],
+    Cruising: ["Holding altitude", ICON.plane], Descending: ["Sinking faster than 300 ft/min", ICON.alt],
+    "Takeoffs today": ["Detected from on-ground flips", ICON.clock], "Landings today": ["Detected from on-ground flips", ICON.cloud] };
+  const vals = { ...ph, "Takeoffs today": s.takeoffs_today || 0, "Landings today": s.landings_today || 0 };
+  setCardHead("phases", "Where every aircraft is right now", "Live phase from altitude and climb rate in the last capture");
+  $("phases").innerHTML = Object.entries(vals).map(([k, v]) => `<div class="phase"><div class="ic">${info[k][1]}</div><b>${fmt(v)}</b><span>${k}</span><p>${info[k][0]}</p></div>`).join("");
+  $("share-n").textContent = air.length;
+  const c = {}; air.forEach(a => c[domesticKey(a)] = (c[domesticKey(a)] || 0) + 1);
+  const keys = [...Object.keys(AIRLINES), "other"], colour = k => k === "other" ? css("--muted") : alColor(k);
+  $("share-legend").innerHTML = keys.map(k => `<div><i style="background:${colour(k)}"></i><span>${k === "other" ? "Other / intl" : AIRLINES[k].name}</span><b>${Math.round((c[k] || 0) / Math.max(1, air.length) * 100)}%</b></div>`).join("");
+  if (charts.share) {
+    charts.share.data.labels = keys; charts.share.data.datasets[0].data = keys.map(k => c[k] || 0);
+    charts.share.data.datasets[0].backgroundColor = keys.map(colour); charts.share.update("none");
+  }
+  setCardHead("cause-bars", "Why flights run late", "Needs schedule data");
+  $("cause-bars").innerHTML = "";
+  $("cause-note").innerHTML = `Delay causes need each flight's scheduled time, and free ADS-B data only says where aircraft are. Adding a schedule source would light this card up.`;
+  const types = {}; air.forEach(a => { const t = a.typecode || "Foreign / unlisted"; types[t] = (types[t] || 0) + 1; });  // only VT- aircraft are loaded
+  const tmax = Math.max(1, ...Object.values(types));
+  setCardHead("type-bars", "What's in the sky", "Aircraft type codes airborne now (from the aircraft database)");
+  $("type-bars").innerHTML = Object.entries(types).sort((a, b) => b[1] - a[1]).slice(0, 9).map(([t, n]) => `<div class="bar-row"><span class="lbl"><i style="background:${css("--teal")}"></i>${TYPE_OF[t] ? `${t} <span class="muted" style="font-weight:500">· ${AIRCRAFT[TYPE_OF[t]].name.split(" ").slice(0, 2).join(" ")}</span>` : t}</span>
+    <div class="track"><div style="width:${n / tmax * 100}%;background:linear-gradient(90deg,${css("--teal")},${css("--primary")})"></div></div><span class="num">${n}<small>${Math.round(n / air.length * 100)}%</small></span></div>`).join("");
+  setCardHead("long", "Highest flying right now", "Barometric altitude in the last capture");
+  $("long").innerHTML = [...air].filter(a => a.baro_altitude != null).sort((a, b) => b.baro_altitude - a.baro_altitude).slice(0, 6).map((a, i) =>
+    `<li data-i="${a.icao24}" style="cursor:pointer"><span class="rk">${i + 1}</span><span class="rn">${a.callsign || a.icao24}<small>${AIRLINES[a.airline_icao]?.name || "Other operator"} · ${a.typecode || "type unknown"}</small></span>
+     <span class="ra"><b>${fmt(a.baro_altitude * FT_PER_M)}<small style="font-size:11px;color:var(--muted)"> ft</small></b></span></li>`).join("");
+  $("long").querySelectorAll("li").forEach(li => li.onclick = () => { LIVE.sel = li.dataset.i; popOpen = false; go("live"); });
 }
 
 function liveSearch() {
