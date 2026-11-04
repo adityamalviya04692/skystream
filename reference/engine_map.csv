@@ -1,0 +1,16 @@
+operator_icao,typecode,engine,maker
+*,A20N,LEAP-1A,CFM International
+IGO,A20N,PW1100G,Pratt & Whitney
+*,A21N,LEAP-1A,CFM International
+*,AT76,PW127M,Pratt & Whitney Canada
+*,AT72,PW127M,Pratt & Whitney Canada
+*,B38M,LEAP-1B,CFM International
+*,B738,CFM56-7B,CFM International
+*,DH8D,PW150A,Pratt & Whitney Canada
+*,B788,GEnx-1B,GE Aerospace
+*,B789,GEnx-1B,GE Aerospace
+*,A359,Trent XWB,Rolls-Royce
+*,B77W,GE90-115B,GE Aerospace
+*,A332,Trent 700,Rolls-Royce
+*,A333,Trent 700,Rolls-Royce
+*,A339,Trent 7000,Rolls-Royce
