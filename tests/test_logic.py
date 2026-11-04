@@ -48,6 +48,11 @@ class MetarTest(unittest.TestCase):
         self.assertEqual(row["visibility_m"], 1600)  # exact metres from the raw report, not the rounded miles
         self.assertEqual(row["wx"], "HZ")
 
+    def test_numeric_fields_are_floats_for_spark(self):
+        row = logic.metar_row({"icaoId": "VABB", "obsTime": 1, "temp": 30, "dewp": 20, "wspd": 5, "visib": 6})
+        for k in ("temp_c", "dewpoint_c", "wind_kt", "visibility_m"):
+            self.assertIsInstance(row[k], float, k)
+
     def test_raw_visibility_with_variable_wind_and_fallback(self):
         raw = "METAR VABB 040400Z 27008KT 240V300 2500 FU FEW100 32/20 Q1015"
         self.assertEqual(logic.metar_row({"icaoId": "VABB", "obsTime": 1, "visib": 1.55, "rawOb": raw})["visibility_m"], 2500)

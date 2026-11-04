@@ -52,6 +52,14 @@ def visibility_m(visib) -> float | None:
     return min(round(miles * SM_TO_M), MAX_VISIBILITY_M)
 
 
+def _num(v) -> float | None:
+    """The API sends whole numbers as ints (temp 30); Spark DOUBLE columns only accept floats."""
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def metar_row(obs: dict) -> dict:
     """Flatten one AviationWeather METAR JSON object into the airport_weather columns."""
     wdir = obs.get("wdir")
@@ -60,11 +68,11 @@ def metar_row(obs: dict) -> dict:
     return {
         "icao": obs.get("icaoId"),
         "obs_time": int(obs["obsTime"]) if obs.get("obsTime") is not None else None,
-        "temp_c": obs.get("temp"),
-        "dewpoint_c": obs.get("dewp"),
+        "temp_c": _num(obs.get("temp")),
+        "dewpoint_c": _num(obs.get("dewp")),
         "wind_dir": None if wdir is None else str(wdir),  # degrees, or "VRB" for variable
-        "wind_kt": obs.get("wspd"),
-        "visibility_m": float(raw_vis.group(1)) if raw_vis else visibility_m(obs.get("visib")),
+        "wind_kt": _num(obs.get("wspd")),
+        "visibility_m": _num(raw_vis.group(1) if raw_vis else visibility_m(obs.get("visib"))),
         "wx": obs.get("wxString"),
         "raw": obs.get("rawOb"),
     }
